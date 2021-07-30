@@ -41,6 +41,7 @@ let playerCount = 0,
   players = {};
 
 io.on('connection', function (socket) {
+  let roomId;
   playerCount++;
   players[socket.id] = {
     uuid: socket.handshake.query.uuid,
@@ -69,6 +70,7 @@ io.on('connection', function (socket) {
           console.log('Room  joined!', room._id);
           socket.emit('roomId', room);
           io.to(room._id).emit('playerChange', room);
+          roomId = [...socket.rooms][1];
         } else {
           Counter.findOneAndUpdate(
             { _id: 'roomid' },
@@ -83,28 +85,31 @@ io.on('connection', function (socket) {
                 socket.join(success._id);
                 console.log('Room created and joined!', success._id);
                 socket.emit('roomId', success);
+                roomId = [...socket.rooms][1];
                 io.to(success._id).emit('playerChange', success);
               });
             }
           );
         }
+        console.log(roomId);
       }
     );
   });
   socket.on('shuffleCards', (roomId) => {
     io.to(roomId).emit('deck', shuffleCards());
   });
-
-  Room.watch().on('change', (room) => {
-    io.to(room.fullDocument._id).emit('playerChange');
-  });
   socket.on('disconnecting', function () {
+    console.log(players);
     playerCount--;
-    let roomId = [...socket.rooms][1];
-    console.log(`${socket.id} left room ${roomId} disconnected`);
+    console.log(socket.id, 'left room', roomId, 'disconnected');
     socket.leave(roomId);
-    Room.findById({ roomId }, (err, room) => {});
-    delete players[socket.id];
+    Room.findOneAndDelete(
+      { _id: roomId, room_players: { uuid: players[socket.id].uuid } },
+      (err, room) => {
+        console.log(players[socket.id].uuid);
+        if (!err) delete players[socket.id];
+      }
+    );
   });
 });
 
