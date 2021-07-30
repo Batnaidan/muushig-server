@@ -1,13 +1,25 @@
 const express = require('express');
-const server = express();
+const app = express();
+const mongoose = require('mongoose');
+const http = require('http').createServer(app);
+const Room = require('./models/room');
+const Counter = require('./models/counter');
 
-const http = require('http').createServer(server);
-const db = require('./config/keys').mongoURI;
+const dbKey = require('./config/keys').mongoURI;
+const PORT = 3000;
 const io = require('socket.io')(http, {
   cors: {
     origin: '*',
   },
 });
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+mongoose.set('useFindAndModify', false);
+mongoose
+  .connect(dbKey, { useUnifiedTopology: true, useNewUrlParser: true })
+  .then(() => console.log('Connected to DB'))
+  .catch((err) => console.log(err));
 
 function shuffleCards() {
   const suits = ['C', 'D', 'H', 'S'];
@@ -26,85 +38,73 @@ function shuffleCards() {
 }
 
 let playerCount = 0,
-  players = [],
-  rooms = [];
+  players = {};
 
 io.on('connection', function (socket) {
   playerCount++;
-  players.push({
-    id: socket.id,
+  players[socket.id] = {
     uuid: socket.handshake.query.uuid,
     name: socket.handshake.query.name,
-  });
+  };
   console.log(
     'A user connected:',
     socket.id,
     socket.handshake.query.uuid,
     socket.handshake.query.name
   );
-  socket.on('findRoom', (contextPlayers) => {
-    if (Array.isArray(rooms) && rooms.length) {
-      rooms.push({
-        isPlaying: false,
-        players: [socket.handshake.query],
-        deck: null,
-      });
-    }
-    for (let i = 0; i < rooms.length; i++) {
-      if (contextPlayers.length + rooms[i].players.length <= 5) {
-        socket.join(i);
-        socket.emit('roomId', roomId);
-        contextPlayers.map((el) => {
-          if (el.id !== socket.id) {
-            io.to(el.id).emit('roomId', roomId);
-          }
-        });
-      }
-      rooms[i].push(socket.handshake.query);
-    }
-  });
-  socket.on('joinRoom', (contextPlayers) => {
-    if (Array.isArray(rooms) && rooms.length) {
-      rooms.push({
-        isPlaying: false,
-        players: [socket.handshake.query],
-        deck: null,
-      });
-    } else {
-      for (let i = 0; i < rooms.length; i++) {
-        if (contextPlayers.length + rooms[i].players.length <= 5) {
-          socket.join(i);
-          socket.emit('roomId', roomId);
-          contextPlayers.map((el) => {
-            if (el.id !== socket.id) {
-              io.to(el.id).emit('roomId', roomId);
-            }
-          });
+  socket.on('findRoom', (player) => {
+    console.log;
+    let data = player;
+    delete data.count;
+    Room.findOneAndUpdate(
+      { room_playerLength: { $lt: player.count }, room_isPlaying: false },
+      { $push: { room_players: data }, $inc: { room_playerLength: 1 } },
+      async (err, room) => {
+        if (err) {
+          console.log(err);
+          return;
         }
-        rooms[i].push(socket.handshake.query);
+        if (room) {
+          socket.join(room._id);
+          socket.emit('roomId', room);
+        } else {
+          Counter.findOneAndUpdate(
+            { _id: 'roomid' },
+            { $inc: { sequence_value: 1 } },
+            (err, count) => {
+              const newRoom = new Room({
+                _id: count.sequence_value,
+                room_playerLength: 1,
+                room_players: [data],
+              });
+              newRoom.save().then((success) => {
+                socket.join(success._id);
+                console.log('Room created!', success._id);
+                socket.emit('roomId', success);
+              });
+            }
+          );
+        }
       }
-      let roomId = Math.floor(playerCount / 5);
-    }
-  });
-  socket.on('changePlayerReadyState', (roomId) => {
-    io.to(roomId).emit('playerStateChange', playerId); //change Player ready state
+    );
   });
   socket.on('shuffleCards', (roomId) => {
     io.to(roomId).emit('deck', shuffleCards());
   });
 
-  socket.on('disconnect', function (roomId) {
+  Room.watch().on('change', (room) => {
+    io.to(room.fullDocument._id).emit('');
+  });
+  socket.on('disconnecting', function () {
     playerCount--;
-    for (let i = 0; i < rooms.length; i++) {
-      rooms[i].players = rooms[i].players.filter(
-        (player) => player.uuid !== socket.handshake.query.uuid
-      );
-    }
-    console.log('A user disconnected:', socket.id);
-    players.filter((player) => player.uuid !== socket.handshake.query.uuid);
+    let roomId = [...socket.rooms][1];
+    console.log(`${socket.id} left room ${roomId} disconnected`);
+    socket.leave(roomId);
+    Room.findById({ roomId }, (err, room) => {});
+    delete players[socket.id];
   });
 });
 
-http.listen(3000, function () {
-  console.log('Server started!');
+http.listen(PORT, function () {
+  console.log(`Server started! http://localhost:${PORT}/`);
 });
