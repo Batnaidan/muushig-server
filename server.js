@@ -66,7 +66,9 @@ io.on('connection', function (socket) {
         }
         if (room) {
           socket.join(room._id);
+          console.log('Room  joined!', room._id);
           socket.emit('roomId', room);
+          io.to(room._id).emit('playerChange', room);
         } else {
           Counter.findOneAndUpdate(
             { _id: 'roomid' },
@@ -79,8 +81,9 @@ io.on('connection', function (socket) {
               });
               newRoom.save().then((success) => {
                 socket.join(success._id);
-                console.log('Room created!', success._id);
+                console.log('Room created and joined!', success._id);
                 socket.emit('roomId', success);
+                io.to(success._id).emit('playerChange', success);
               });
             }
           );
@@ -93,7 +96,7 @@ io.on('connection', function (socket) {
   });
 
   Room.watch().on('change', (room) => {
-    io.to(room.fullDocument._id).emit('');
+    io.to(room.fullDocument._id).emit('playerChange');
   });
   socket.on('disconnecting', function () {
     playerCount--;
