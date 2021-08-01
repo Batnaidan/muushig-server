@@ -38,15 +38,12 @@ function shuffleCards() {
 }
 
 let playerCount = 0,
-  players = {};
+  deck;
 
 io.on('connection', function (socket) {
   let roomId;
   playerCount++;
-  players[socket.id] = {
-    uuid: socket.handshake.query.uuid,
-    name: socket.handshake.query.name,
-  };
+  socket.nickname = socket.handshake.query.uuid.toString();
   console.log(
     'A user connected:',
     socket.id,
@@ -54,7 +51,6 @@ io.on('connection', function (socket) {
     socket.handshake.query.name
   );
   socket.on('findRoom', (player) => {
-    console.log;
     let data = player;
     delete data.count;
     Room.findOneAndUpdate(
@@ -71,6 +67,7 @@ io.on('connection', function (socket) {
           socket.emit('roomId', room);
           io.to(room._id).emit('playerChange', room);
           roomId = [...socket.rooms][1];
+          console.log(roomId);
         } else {
           Counter.findOneAndUpdate(
             { _id: 'roomid' },
@@ -86,28 +83,112 @@ io.on('connection', function (socket) {
                 console.log('Room created and joined!', success._id);
                 socket.emit('roomId', success);
                 roomId = [...socket.rooms][1];
+                console.log(roomId);
                 io.to(success._id).emit('playerChange', success);
               });
             }
           );
         }
-        console.log(roomId);
       }
     );
   });
-  socket.on('shuffleCards', (roomId) => {
-    io.to(roomId).emit('deck', shuffleCards());
+  socket.on('playerStateChange', (isReady) => {
+    Room.findOneAndUpdate(
+      {
+        _id: roomId,
+        'room_players.uuid': socket.nickname,
+      },
+      {
+        $set: { 'room_players.$.ready': isReady },
+      },
+      { new: true },
+      (err, room) => {
+        if (!err) {
+          let playerStateData = {
+            id: socket.id,
+            uuid: socket.nickname,
+            ready: isReady,
+          };
+          io.to(roomId).emit('playerStateChange', playerStateData);
+          let isRoomReady = true;
+          room.room_players.forEach((element) => {
+            if (element.ready == false) isRoomReady = false;
+          });
+          if (isRoomReady) {
+            deck = shuffleCards();
+            Room.findOneAndUpdate(
+              {
+                _id: roomId,
+              },
+              {
+                room_deck: deck,
+              },
+              (err, room) => {
+                if (!err) {
+                  // for (let i = 0; i < 5; i++) {
+                  //   playerCards.push({
+                  //     skipCount: 0,
+                  //     cards: [
+                  //       deck.shift(),
+                  //       deck.shift(),
+                  //       deck.shift(),
+                  //       deck.shift(),
+                  //       deck.shift(),
+                  //     ],
+                  //   });
+                  // }
+                  let roomRoster = io.sockets.adapter.rooms.get(roomId);
+                  roomRoster.forEach(function (client) {
+                    io.to(roomId).emit('deck', {
+                      skipCount: 0,
+                      cards: [
+                        deck.shift(),
+                        deck.shift(),
+                        deck.shift(),
+                        deck.shift(),
+                        deck.shift(),
+                      ],
+                      //this is the socket of each client in the room.
+                      //const clientSocket = io.sockets.sockets.get(clientId);
+                    });
+                    console.log('Username: ' + client.nickname);
+                  });
+                }
+              }
+            );
+          }
+        }
+      }
+    );
   });
+  // socket.on('');
   socket.on('disconnecting', function () {
-    console.log(players);
     playerCount--;
-    console.log(socket.id, 'left room', roomId, 'disconnected');
+    console.log(socket.id, 'disconnected', roomId, '');
     socket.leave(roomId);
     Room.findOneAndDelete(
-      { _id: roomId, room_players: { uuid: players[socket.id].uuid } },
+      {
+        _id: roomId,
+        'room_players.uuid': socket.nickname,
+        room_playerLength: 1,
+      },
       (err, room) => {
-        console.log(players[socket.id].uuid);
-        if (!err) delete players[socket.id];
+        if (err) {
+          Room.findOneAndUpdate(
+            {
+              _id: roomId,
+              'room_players.uuid': socket.nickname,
+              room_playerLength: { $gte: 2 },
+            },
+            {
+              $pull: {
+                'room_players.uuid': socket.nickname,
+              },
+              $inc: { room_playerLength: -1 },
+            },
+            (err, success) => {}
+          );
+        }
       }
     );
   });
