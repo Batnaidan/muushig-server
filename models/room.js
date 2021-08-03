@@ -4,6 +4,8 @@ const Schema = mongoose.Schema;
 const roomSchema = new Schema({
   _id: { type: Number, default: 100000, required: true },
   room_isPlaying: { type: Boolean, default: false },
+  room_stage: { type: String, default: 'change' },
+  room_dealer: { type: String },
   room_deck: { type: Array, default: [] },
   room_players: {
     type: Array,

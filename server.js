@@ -37,7 +37,7 @@ function shuffleCards() {
   return deck;
 }
 
-let roomId, timeOut, deck;
+let timeOut, deck, dealerId;
 
 // Room.findOneAndUpdate(
 //   {
@@ -131,7 +131,7 @@ io.on('connection', function (socket) {
           console.log('Room joined!', room._id);
           socket.emit('roomId', room);
           io.to(room._id).emit('playerChange', room);
-          roomId = [...socket.rooms][1];
+          socket.data.roomId = [...socket.rooms][1];
           if (room.room_playerLength >= 2) restartCountDown();
         }
       );
@@ -149,8 +149,8 @@ io.on('connection', function (socket) {
             socket.join(room._id);
             socket.emit('roomId', room);
             io.to(room._id).emit('playerChange', room);
-            roomId = [...socket.rooms][1];
-            console.log('Room  joined!', roomId);
+            socket.data.roomId = [...socket.rooms][1];
+            console.log('Room  joined!', socket.data.roomId);
             if (room.room_playerLength >= 2) restartCountDown();
           } else {
             Counter.findOneAndUpdate(
@@ -166,9 +166,9 @@ io.on('connection', function (socket) {
                   socket.join(success._id);
                   socket.emit('roomId', success);
                   io.to(success._id).emit('playerChange', success);
-                  roomId = [...socket.rooms][1];
-                  console.log('Room created and joined!', roomId);
-                  if (success.room_playerLength >= 2) restartCountDown();
+                  socket.data.roomId = [...socket.rooms][1];
+                  console.log('Room created and joined!', socket.data.roomId);
+                  if (success.room_playerLength >= 1) restartCountDown();
                 });
               }
             );
@@ -177,13 +177,30 @@ io.on('connection', function (socket) {
       );
     }
   });
+
+  socket.on('dropCards', (droppedCards) => {
+    Room.findOneAndUpdate(
+      {
+        _id: socket.data.roomId,
+        'room_players.uuid': socket.data.uuid,
+      },
+      {
+        $pop: { room_deck: -droppedCards.length },
+        $pullAll: { 'room_players.$.cards': droppedCards },
+      },
+      { new: true },
+      (err, room) => {
+        if (!err) io.to(room._id).emit('dropCards', room);
+      }
+    );
+  });
   socket.on('disconnecting', function () {
-    socket.leave(roomId);
+    socket.leave(socket.data.roomId);
     let player_uuid = socket.data.uuid;
     let player_name = socket.data.name;
     Room.findOneAndDelete(
       {
-        _id: roomId,
+        _id: socket.data.roomId,
         'room_players.uuid': player_uuid,
         room_playerLength: 1,
       },
@@ -191,7 +208,7 @@ io.on('connection', function (socket) {
         if (!room) {
           Room.findOneAndUpdate(
             {
-              _id: roomId,
+              _id: socket.data.roomId,
               room_playerLength: { $gte: 2 },
             },
             {
@@ -201,7 +218,8 @@ io.on('connection', function (socket) {
               $inc: { room_playerLength: -1 },
             },
             (err, success) => {
-              if (!err) console.log(player_name, 'disconnected', roomId);
+              if (!err)
+                console.log(player_name, 'disconnected', socket.data.roomId);
             }
           );
         }
@@ -214,11 +232,15 @@ io.on('connection', function (socket) {
 
     timeOut = setTimeout(function () {
       deck = shuffleCards();
-      let roomRoster = io.sockets.adapter.rooms.get(roomId);
+      let roomRoster = io.sockets.adapter.rooms.get(socket.data.roomId);
       roomRoster = [...roomRoster];
       console.log('Game has started');
       roomRoster.forEach(async function (client, i) {
         // this is the socket of each client in the room.
+        const clientSocket = io.sockets.sockets.get(client);
+        // if (i === 0) {
+        //   dealerId = clientSocket.data.uuid;
+        // }
         let playerDeck = [
           deck[i * 5],
           deck[i * 5 + 1],
@@ -226,14 +248,12 @@ io.on('connection', function (socket) {
           deck[i * 5 + 3],
           deck[i * 5 + 4],
         ];
-        const clientSocket = io.sockets.sockets.get(client);
         await Room.findOneAndUpdate(
           {
-            _id: roomId,
+            _id: socket.data.roomId,
             'room_players.uuid': clientSocket.data.uuid,
           },
           {
-            room_deck: deck,
             'room_players.$.cards': playerDeck,
           },
           { new: true },
@@ -243,13 +263,24 @@ io.on('connection', function (socket) {
               clientSocket.data.uuid,
               playerDeck
             );
-            if (i === roomRoster.length - 1) {
-              io.to(room._id).emit('startGame', room);
-            }
           }
         );
       });
-    }, 5000);
+      Room.findOneAndUpdate(
+        {
+          _id: socket.data.roomId,
+        },
+        {
+          room_deck: deck.slice(25),
+          room_dealer: io.sockets.sockets.get(roomRoster[0]).data.uuid,
+          room_isPlaying: true,
+        },
+        { new: true },
+        (err, room) => {
+          if (!err) io.to(room._id).emit('startGame', room);
+        }
+      );
+    }, 1000);
   }
 });
 
