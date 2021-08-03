@@ -102,13 +102,13 @@ let roomId, timeOut, deck;
 // );
 
 io.on('connection', function (socket) {
-  socket.data.uuid = socket.handshake.query.uuid.toString();
+  socket.data.uuid = socket.handshake.query.uuid;
   socket.data.name = socket.handshake.query.name;
   console.log(
-    'A user connected:',
+    socket.handshake.query.name,
+    'connected',
     socket.id,
-    socket.handshake.query.uuid,
-    socket.handshake.query.name
+    socket.handshake.query.uuid
   );
 
   socket.on('findRoom', (player) => {
@@ -179,10 +179,12 @@ io.on('connection', function (socket) {
   });
   socket.on('disconnecting', function () {
     socket.leave(roomId);
+    let player_uuid = socket.data.uuid;
+    let player_name = socket.data.name;
     Room.findOneAndDelete(
       {
         _id: roomId,
-        'room_players.uuid': socket.data.uuid,
+        'room_players.uuid': player_uuid,
         room_playerLength: 1,
       },
       (err, room) => {
@@ -194,12 +196,12 @@ io.on('connection', function (socket) {
             },
             {
               $pull: {
-                room_players: { uuid: socket.data.uuid },
+                room_players: { uuid: player_uuid },
               },
               $inc: { room_playerLength: -1 },
             },
             (err, success) => {
-              if (!err) console.log(socket.data.name, 'disconnected', roomId);
+              if (!err) console.log(player_name, 'disconnected', roomId);
             }
           );
         }
@@ -241,7 +243,7 @@ io.on('connection', function (socket) {
               clientSocket.data.uuid,
               playerDeck
             );
-            if (i === roomRoster.length) {
+            if (i === roomRoster.length - 1) {
               io.to(room._id).emit('startGame', room);
             }
           }
