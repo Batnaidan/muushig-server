@@ -37,69 +37,7 @@ function shuffleCards() {
   return deck;
 }
 
-let timeOut, deck, dealerId;
-
-// Room.findOneAndUpdate(
-//   {
-//     _id: roomId,
-//     'room_players.uuid': socket.data.uuid,
-//   },
-//   {
-//     $set: { 'room_players.$.ready': isReady },
-//   },
-//   { new: true },
-//   (err, room) => {
-//     if (!err) {
-//       let playerStateData = {
-//         id: socket.id,
-//         uuid: socket.data.uuid,
-//         ready: isReady,
-//       };
-//       io.to(roomId).emit('playerStateChange', playerStateData);
-//       deck = shuffleCards();
-//       Room.findOneAndUpdate(
-//         {
-//           _id: roomId,
-//         },
-//         {
-//           room_deck: deck,
-//         },
-//         (err, room) => {
-//           if (!err) {
-//             // for (let i = 0; i < 5; i++) {
-//             //   playerCards.push({
-//             //     skipCount: 0,
-//             //     cards: [
-//             //       deck.shift(),
-//             //       deck.shift(),
-//             //       deck.shift(),
-//             //       deck.shift(),
-//             //       deck.shift(),
-//             //     ],
-//             //   });
-//             // }
-//             let roomRoster = io.sockets.adapter.rooms.get(roomId);
-//             roomRoster.forEach(function (client) {
-//               io.to(roomId).emit('deck', {
-//                 skipCount: 0,
-//                 cards: [
-//                   deck.shift(),
-//                   deck.shift(),
-//                   deck.shift(),
-//                   deck.shift(),
-//                   deck.shift(),
-//                 ],
-//                 //this is the socket of each client in the room.
-//                 //const clientSocket = io.sockets.sockets.get(client.id);
-//               });
-//               console.log('Username: ' + client.data.uuid);
-//             });
-//           }
-//         }
-//       );
-//     }
-//   }
-// );
+let timeOut, deck;
 
 io.on('connection', function (socket) {
   socket.data.uuid = socket.handshake.query.uuid;
@@ -168,7 +106,7 @@ io.on('connection', function (socket) {
                   io.to(success._id).emit('playerChange', success);
                   socket.data.roomId = [...socket.rooms][1];
                   console.log('Room created and joined!', socket.data.roomId);
-                  if (success.room_playerLength >= 1) restartCountDown();
+                  if (success.room_playerLength >= 2) restartCountDown();
                 });
               }
             );
@@ -177,20 +115,68 @@ io.on('connection', function (socket) {
       );
     }
   });
-
-  socket.on('dropCards', (droppedCards) => {
-    Room.findOneAndUpdate(
+  socket.on('changeReady', (isReady) => {
+    Room.findOne(
       {
         _id: socket.data.roomId,
-        'room_players.uuid': socket.data.uuid,
       },
-      {
-        $pop: { room_deck: -droppedCards.length },
-        $pullAll: { 'room_players.$.cards': droppedCards },
-      },
-      { new: true },
       (err, room) => {
-        if (!err) io.to(room._id).emit('dropCards', room);
+        const isMe = (element) => element.uuid == socket.data.uuid;
+        playerIndex = room.room_players.findIndex(isMe);
+        console.log(playerIndex);
+        if (
+          room.room_playerLength > playerIndex + 1 &&
+          room.room_stage == 'ready'
+        ) {
+          room.room_turn = room.room_players[playerIndex + 1].uuid;
+        } else if (
+          room.room_playerLength == playerIndex + 1 &&
+          room.room_stage == 'ready'
+        ) {
+          room.room_turn = room.room_players[0].uuid;
+          room.room_stage = 'change';
+        }
+        room.room_players[playerIndex].ready = isReady;
+        room.markModified('room_players');
+        room.save((err, result) => {
+          if (!err) io.to(room._id).emit('changeReady', result);
+          // } else if(!err && room.room_turn == 'change'){
+
+          // }
+        });
+      }
+    );
+  });
+  socket.on('changeCards', (droppedCards) => {
+    console.log(socket.data.roomId, socket.data.uuid, droppedCards);
+    Room.findOne(
+      {
+        _id: socket.data.roomId,
+      },
+      (err, room) => {
+        const isMe = (element) => element.uuid == socket.data.uuid;
+        playerIndex = room.room_players.findIndex(isMe);
+        console.log(playerIndex);
+        if (
+          room.room_playerLength > playerIndex + 1 &&
+          room.room_stage == 'change'
+        ) {
+          room.room_turn = room.room_players[playerIndex + 1].uuid;
+        } else if (room.room_deck.length == 0 && room.room_stage == 'change') {
+          room.room_stage = 'put';
+          room.room_turn = room.room_players[0].uuid;
+        }
+        droppedCards.forEach((card) => {
+          let i = room.room_players[playerIndex].cards.indexOf(card);
+          room.room_players[playerIndex].cards.splice(i, 1);
+        });
+        let swapCards = room.room_deck.splice(0, droppedCards.length);
+        room.room_players[playerIndex].cards.push(...swapCards);
+        room.markModified('room_players');
+        room.save((err, result) => {
+          if (!err) io.to(room._id).emit('changeCards', result);
+          console.log(JSON.stringify(result.room_players));
+        });
       }
     );
   });
@@ -234,52 +220,32 @@ io.on('connection', function (socket) {
       deck = shuffleCards();
       let roomRoster = io.sockets.adapter.rooms.get(socket.data.roomId);
       roomRoster = [...roomRoster];
-      console.log('Game has started');
-      roomRoster.forEach(async function (client, i) {
-        // this is the socket of each client in the room.
-        const clientSocket = io.sockets.sockets.get(client);
-        // if (i === 0) {
-        //   dealerId = clientSocket.data.uuid;
-        // }
-        let playerDeck = [
-          deck[i * 5],
-          deck[i * 5 + 1],
-          deck[i * 5 + 2],
-          deck[i * 5 + 3],
-          deck[i * 5 + 4],
-        ];
-        await Room.findOneAndUpdate(
-          {
-            _id: socket.data.roomId,
-            'room_players.uuid': clientSocket.data.uuid,
-          },
-          {
-            'room_players.$.cards': playerDeck,
-          },
-          { new: true },
-          (err, room) => {
-            console.log(
-              'Username: ' + clientSocket.data.name,
-              clientSocket.data.uuid,
-              playerDeck
-            );
+      console.log('Game has started', socket.data.roomId);
+      Room.findOne({ _id: socket.data.roomId }, (err, room) => {
+        if (!err) {
+          room.room_turn = room.room_players[0].uuid;
+          for (let i = 0; i < room.room_players.length; i++) {
+            room.room_players[i].cards = [
+              deck[i * 5],
+              deck[i * 5 + 1],
+              deck[i * 5 + 2],
+              deck[i * 5 + 3],
+              deck[i * 5 + 4],
+            ];
           }
-        );
-      });
-      Room.findOneAndUpdate(
-        {
-          _id: socket.data.roomId,
-        },
-        {
-          room_deck: deck.slice(25),
-          room_dealer: io.sockets.sockets.get(roomRoster[0]).data.uuid,
-          room_isPlaying: true,
-        },
-        { new: true },
-        (err, room) => {
-          if (!err) io.to(room._id).emit('startGame', room);
+          room.markModified('room_players');
+          room.room_specialCard = deck[25];
+          room.room_deck = deck.slice(26);
+          room.room_dealer = io.sockets.sockets.get(roomRoster[0]).data.uuid;
+          room.room_isPlaying = true;
+          room.save((err, result) => {
+            console.log(JSON.stringify(result.room_players));
+            if (!err) {
+              io.to(room._id).emit('startGame', result);
+            }
+          });
         }
-      );
+      });
     }, 1000);
   }
 });
