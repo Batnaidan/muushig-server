@@ -137,6 +137,8 @@ io.on('connection', function (socket) {
           room.room_stage = 'change';
         }
         room.room_players[playerIndex].ready = isReady;
+        if (isReady) room.room_readyPlayerCount++;
+        if (!isReady) room.room_players[playerIndex].skipCount += 1;
         room.markModified('room_players');
         room.save((err, result) => {
           if (!err) io.to(room._id).emit('changeReady', result);
@@ -154,24 +156,44 @@ io.on('connection', function (socket) {
         _id: socket.data.roomId,
       },
       (err, room) => {
+        if (room.room_stage != 'change') return;
         const isMe = (element) => element.uuid == socket.data.uuid;
         playerIndex = room.room_players.findIndex(isMe);
-        console.log(playerIndex);
-        if (
-          room.room_playerLength > playerIndex + 1 &&
-          room.room_stage == 'change'
-        ) {
-          room.room_turn = room.room_players[playerIndex + 1].uuid;
-        } else if (room.room_deck.length == 0 && room.room_stage == 'change') {
-          room.room_stage = 'put';
-          room.room_turn = room.room_players[0].uuid;
-        }
+        // if (
+        //   room.room_playerLength > playerIndex + 1 &&
+        //   room.room_stage == 'change'
+        // ) {
+        //   room.room_turn = room.room_players[playerIndex + 1].uuid;
+        // } else if (
+        //   room.room_playerLength == playerIndex + 1 &&
+        //   room.room_stage == 'change'
+        // ) {
+        //   room.room_stage = 'put';
+        //   room.room_turn = room.room_players[0].uuid;
+        // }
         droppedCards.forEach((card) => {
           let i = room.room_players[playerIndex].cards.indexOf(card);
           room.room_players[playerIndex].cards.splice(i, 1);
         });
         let swapCards = room.room_deck.splice(0, droppedCards.length);
         room.room_players[playerIndex].cards.push(...swapCards);
+
+        if (room.room_playerLength == playerIndex + 1) {
+          room.room_stage = 'put';
+          room.room_turn = room.room_players[0].uuid;
+        } else {
+          for (
+            playerIndex += 1;
+            playerIndex < room.room_playerLength;
+            playerIndex++
+          ) {
+            console.log(playerIndex);
+            if (room.room_players[playerIndex].ready == true) {
+              room.room_turn = room.room_players[playerIndex].uuid;
+              break;
+            }
+          }
+        }
         room.markModified('room_players');
         room.save((err, result) => {
           if (!err) io.to(room._id).emit('changeCards', result);
@@ -180,7 +202,103 @@ io.on('connection', function (socket) {
       }
     );
   });
-  socket.on('disconnecting', function () {
+  socket.on('putCards', (putCard) => {
+    Room.findOne(
+      {
+        _id: socket.data.roomId,
+      },
+      (err, room) => {
+        if (room.room_stage != 'put') return;
+        let specialCardType =
+          room.room_specialCard[room.room_specialCard.length - 1];
+        let putCardType = putCard[putCard.length - 1];
+        let putCardRank = parseInt(putCard.slice(0, putCard.length - 1));
+        if (room.room_currentCards.length == 0) {
+          room.room_currentCards.push(putCard);
+          room.room_currentCardLeader = socket.data.uuid;
+        } else {
+          let currentCard =
+            room.room_currentCards[room.room_currentCards.length - 1];
+          let currentCardType = currentCard[currentCard.length - 1];
+          let currentCardRank = parseInt(
+            currentCard.slice(0, currentCard.length - 1)
+          );
+          if (
+            putCardType == specialCardType &&
+            currentCardType == specialCardType
+          ) {
+            if (putCardRank > currentCardRank) {
+              room.room_currentCards.push(putCard);
+              room.room_currentCardLeader = socket.data.uuid;
+            } else {
+              room.room_currentCards.unshift(putCard);
+            }
+          } else if (
+            putCardType == specialCardType &&
+            currentCardType != specialCardType
+          ) {
+            room.room_currentCards.push(putCard);
+            room.room_currentCardLeader = socket.data.uuid;
+          } else if (
+            putCardType != specialCardType &&
+            currentCardType != specialCardType
+          ) {
+            if (putCardRank > currentCardRank) {
+              room.room_currentCards.push(putCard);
+              room.room_currentCardLeader = socket.data.uuid;
+            } else {
+              room.room_currentCards.unshift(putCard);
+            }
+          } else if (
+            putCardType != specialCardType &&
+            currentCardType == specialCardType
+          ) {
+            room.room_currentCards.unshift(putCard);
+          }
+        }
+        const isMe = (element) => element.uuid == socket.data.uuid;
+        playerIndex = room.room_players.findIndex(isMe);
+        let i = room.room_players[playerIndex].cards.indexOf(putCard);
+        room.room_players[playerIndex].cards.splice(i, 1);
+
+        if (room.room_playerLength == playerIndex + 1) {
+          room.room_players.forEach((player, i) => {
+            if (player.uuid == room.room_currentCardLeader) {
+              player.score -= 1;
+            }
+          });
+          room.room_turn = room.room_currentCardLeader;
+          room.currentCards = [];
+          room.room_currentCardLeader = '';
+          room.markModified('room_currentCards');
+          room.markModified('room_players');
+          room.save((err, result) => {
+            if (!err) io.to(result._id).emit('roundOver', result);
+            console.log(JSON.stringify(result.room_currentCards));
+          });
+        } else {
+          for (
+            playerIndex += 1;
+            playerIndex < room.room_playerLength;
+            playerIndex++
+          ) {
+            console.log(playerIndex);
+            if (room.room_players[playerIndex].ready == true) {
+              room.room_turn = room.room_players[playerIndex].uuid;
+              break;
+            }
+          }
+          room.markModified('room_currentCards');
+          room.markModified('room_players');
+          room.save((err, result) => {
+            if (!err) io.to(result._id).emit('putCards', result);
+            console.log(JSON.stringify(result.room_currentCards));
+          });
+        }
+      }
+    );
+  });
+  socket.on('disconnecting', () => {
     socket.leave(socket.data.roomId);
     let player_uuid = socket.data.uuid;
     let player_name = socket.data.name;
@@ -236,7 +354,7 @@ io.on('connection', function (socket) {
           room.markModified('room_players');
           room.room_specialCard = deck[25];
           room.room_deck = deck.slice(26);
-          room.room_dealer = io.sockets.sockets.get(roomRoster[0]).data.uuid;
+          room.room_dealerIndex = 0;
           room.room_isPlaying = true;
           room.save((err, result) => {
             console.log(JSON.stringify(result.room_players));
