@@ -12,11 +12,13 @@ const roomSchema = new Schema({
     default: [],
   },
   room_turn: { type: String, default: '' },
+  room_readyPlayers: { type: Array, default: [] },
   room_readyPlayerCount: { type: Number, default: 0 },
   room_specialCard: { type: String, default: '' },
   room_created: { type: Date, default: Date.now },
   room_playerLength: { type: Number, default: 0 },
   room_currentCards: { type: Array, default: [] },
   room_currentCardLeader: { type: String, default: '' },
+  room_prevCards: { type: Array, default: [] },
 });
 module.exports = mongoose.model('rooms', roomSchema);

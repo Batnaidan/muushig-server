@@ -70,7 +70,7 @@ io.on('connection', function (socket) {
           socket.emit('roomId', room);
           io.to(room._id).emit('playerChange', room);
           socket.data.roomId = [...socket.rooms][1];
-          if (room.room_playerLength >= 2) restartCountDown();
+          if (room.room_playerLength >= 2) initGame();
         }
       );
     } else {
@@ -89,7 +89,7 @@ io.on('connection', function (socket) {
             io.to(room._id).emit('playerChange', room);
             socket.data.roomId = [...socket.rooms][1];
             console.log('Room  joined!', socket.data.roomId);
-            if (room.room_playerLength >= 2) restartCountDown();
+            if (room.room_playerLength >= 2) initGame();
           } else {
             Counter.findOneAndUpdate(
               { _id: 'roomid' },
@@ -106,7 +106,7 @@ io.on('connection', function (socket) {
                   io.to(success._id).emit('playerChange', success);
                   socket.data.roomId = [...socket.rooms][1];
                   console.log('Room created and joined!', socket.data.roomId);
-                  if (success.room_playerLength >= 2) restartCountDown();
+                  if (success.room_playerLength >= 2) initGame();
                 });
               }
             );
@@ -123,7 +123,6 @@ io.on('connection', function (socket) {
       (err, room) => {
         const isMe = (element) => element.uuid == socket.data.uuid;
         playerIndex = room.room_players.findIndex(isMe);
-        console.log(playerIndex);
         if (
           room.room_playerLength > playerIndex + 1 &&
           room.room_stage == 'ready'
@@ -137,20 +136,19 @@ io.on('connection', function (socket) {
           room.room_stage = 'change';
         }
         room.room_players[playerIndex].ready = isReady;
-        if (isReady) room.room_readyPlayerCount++;
+        if (isReady) {
+          room.room_readyPlayerCount += 1;
+          room.room_readyPlayers.push(socket.data.uuid);
+        }
         if (!isReady) room.room_players[playerIndex].skipCount += 1;
         room.markModified('room_players');
         room.save((err, result) => {
           if (!err) io.to(room._id).emit('changeReady', result);
-          // } else if(!err && room.room_turn == 'change'){
-
-          // }
         });
       }
     );
   });
   socket.on('changeCards', (droppedCards) => {
-    console.log(socket.data.roomId, socket.data.uuid, droppedCards);
     Room.findOne(
       {
         _id: socket.data.roomId,
@@ -159,35 +157,28 @@ io.on('connection', function (socket) {
         if (room.room_stage != 'change') return;
         const isMe = (element) => element.uuid == socket.data.uuid;
         playerIndex = room.room_players.findIndex(isMe);
-        // if (
-        //   room.room_playerLength > playerIndex + 1 &&
-        //   room.room_stage == 'change'
-        // ) {
-        //   room.room_turn = room.room_players[playerIndex + 1].uuid;
-        // } else if (
-        //   room.room_playerLength == playerIndex + 1 &&
-        //   room.room_stage == 'change'
-        // ) {
-        //   room.room_stage = 'put';
-        //   room.room_turn = room.room_players[0].uuid;
-        // }
+
         droppedCards.forEach((card) => {
           let i = room.room_players[playerIndex].cards.indexOf(card);
           room.room_players[playerIndex].cards.splice(i, 1);
         });
         let swapCards = room.room_deck.splice(0, droppedCards.length);
         room.room_players[playerIndex].cards.push(...swapCards);
-
-        if (room.room_playerLength == playerIndex + 1) {
-          room.room_stage = 'put';
-          room.room_turn = room.room_players[0].uuid;
+        let readyPlayerIndex = room.room_readyPlayers.indexOf(socket.data.uuid);
+        if (room.room_readyPlayerCount == readyPlayerIndex + 1) {
+          if (room.room_players[room.room_dealer].ready) {
+            room.room_turn = room.room_players[room.room_dealer].uuid;
+            room.room_stage = 'changeDealerCard';
+          } else {
+            room.room_turn = room.readyPlayers[0];
+            room.room_stage = 'put';
+          }
         } else {
           for (
             playerIndex += 1;
             playerIndex < room.room_playerLength;
             playerIndex++
           ) {
-            console.log(playerIndex);
             if (room.room_players[playerIndex].ready == true) {
               room.room_turn = room.room_players[playerIndex].uuid;
               break;
@@ -197,7 +188,34 @@ io.on('connection', function (socket) {
         room.markModified('room_players');
         room.save((err, result) => {
           if (!err) io.to(room._id).emit('changeCards', result);
-          console.log(JSON.stringify(result.room_players));
+        });
+      }
+    );
+  });
+  socket.on('changeDealerCard', (droppedCard) => {
+    Room.findOne(
+      {
+        _id: socket.data.roomId,
+      },
+      (err, room) => {
+        let i = room.room_players[room.room_dealer].cards.indexOf(
+          droppedCard[0]
+        );
+        room.room_players[room.room_dealer].cards.splice(i, 1);
+        room.room_players[room.room_dealer].cards.push(room.room_specialCard);
+
+        let j = 0;
+        for (; j < room.room_playerLength; j++) {
+          if (room.room_players[j].ready == true) {
+            room.room_turn = room.room_players[j].uuid;
+            break;
+          }
+        }
+        room.room_stage = 'put';
+        room.markModified('room_players');
+        room.save((err, result) => {
+          if (!err) io.to(result._id).emit('changeCards', result);
+          console.log('changeDealerCard');
         });
       }
     );
@@ -261,38 +279,43 @@ io.on('connection', function (socket) {
         let i = room.room_players[playerIndex].cards.indexOf(putCard);
         room.room_players[playerIndex].cards.splice(i, 1);
 
-        if (room.room_playerLength == playerIndex + 1) {
-          room.room_players.forEach((player, i) => {
+        if (room.room_readyPlayerCount == room.room_currentCards.length) {
+          console.log('if');
+          room.room_players.forEach((player) => {
             if (player.uuid == room.room_currentCardLeader) {
               player.score -= 1;
             }
           });
+          room.room_prevCards = room.room_currentCards;
+          room.room_currentCards = [];
           room.room_turn = room.room_currentCardLeader;
-          room.currentCards = [];
           room.room_currentCardLeader = '';
           room.markModified('room_currentCards');
           room.markModified('room_players');
+          room.markModified('room_prevCards');
           room.save((err, result) => {
             if (!err) io.to(result._id).emit('roundOver', result);
-            console.log(JSON.stringify(result.room_currentCards));
+            console.log('roundOver', result.room_prevCards);
           });
         } else {
-          for (
+          console.log(playerIndex, room.room_playerLength);
+          if (playerIndex + 1 == room.room_playerLength) {
+            playerIndex = 0;
+          } else {
             playerIndex += 1;
-            playerIndex < room.room_playerLength;
-            playerIndex++
-          ) {
-            console.log(playerIndex);
+          }
+          for (; playerIndex < room.room_playerLength; playerIndex++) {
             if (room.room_players[playerIndex].ready == true) {
               room.room_turn = room.room_players[playerIndex].uuid;
               break;
             }
           }
+          console.log('else');
           room.markModified('room_currentCards');
           room.markModified('room_players');
           room.save((err, result) => {
             if (!err) io.to(result._id).emit('putCards', result);
-            console.log(JSON.stringify(result.room_currentCards));
+            console.log('put', result.room_currentCards);
           });
         }
       }
@@ -331,7 +354,7 @@ io.on('connection', function (socket) {
     );
   });
 
-  function restartCountDown() {
+  function initGame() {
     if (timeOut) clearTimeout(timeOut);
 
     timeOut = setTimeout(function () {
@@ -341,7 +364,6 @@ io.on('connection', function (socket) {
       console.log('Game has started', socket.data.roomId);
       Room.findOne({ _id: socket.data.roomId }, (err, room) => {
         if (!err) {
-          room.room_turn = room.room_players[0].uuid;
           for (let i = 0; i < room.room_players.length; i++) {
             room.room_players[i].cards = [
               deck[i * 5],
@@ -351,13 +373,15 @@ io.on('connection', function (socket) {
               deck[i * 5 + 4],
             ];
           }
-          room.markModified('room_players');
+          room.room_stage = 'ready';
+          room.room_players.push(room.room_players.shift()); //shift first player to last and make him dealer
           room.room_specialCard = deck[25];
           room.room_deck = deck.slice(26);
-          room.room_dealerIndex = 0;
+          room.room_dealer = room.room_playerLength - 1;
           room.room_isPlaying = true;
+          room.room_turn = room.room_players[0].uuid;
+          room.markModified('room_players');
           room.save((err, result) => {
-            console.log(JSON.stringify(result.room_players));
             if (!err) {
               io.to(room._id).emit('startGame', result);
             }
