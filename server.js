@@ -9,7 +9,10 @@ const dbKey = require('./config/keys').mongoURI;
 const PORT = 3000;
 const io = require('socket.io')(http, {
   cors: {
-    origin: '*',
+    origin: [
+      'https://localhost:8080',
+      'https://apps-967075340802214.apps.fbsbx.com',
+    ],
   },
 });
 app.use(express.json());
@@ -70,7 +73,7 @@ io.on('connection', function (socket) {
           socket.emit('roomId', room);
           io.to(room._id).emit('playerChange', room);
           socket.data.roomId = [...socket.rooms][1];
-          if (room.room_playerLength >= 2) initGame();
+          if (room.room_playerLength >= 2) restartRound();
         }
       );
     } else {
@@ -89,7 +92,7 @@ io.on('connection', function (socket) {
             io.to(room._id).emit('playerChange', room);
             socket.data.roomId = [...socket.rooms][1];
             console.log('Room  joined!', socket.data.roomId);
-            if (room.room_playerLength >= 2) initGame();
+            if (room.room_playerLength >= 2) restartRound();
           } else {
             Counter.findOneAndUpdate(
               { _id: 'roomid' },
@@ -106,7 +109,7 @@ io.on('connection', function (socket) {
                   io.to(success._id).emit('playerChange', success);
                   socket.data.roomId = [...socket.rooms][1];
                   console.log('Room created and joined!', socket.data.roomId);
-                  if (success.room_playerLength >= 2) initGame();
+                  if (success.room_playerLength >= 2) restartRound();
                 });
               }
             );
@@ -296,9 +299,15 @@ io.on('connection', function (socket) {
           room.save((err, result) => {
             if (!err) io.to(result._id).emit('roundOver', result);
             console.log('roundOver', result.room_prevCards);
+            if (result.room_players[0].cards.length == 0) {
+              result.room_players.forEach((players, i) => {
+                if (players.score <= 0) {
+                  io.to(result._id).emit('matchEnd', result);
+                }
+              });
+            }
           });
         } else {
-          console.log(playerIndex, room.room_playerLength);
           if (playerIndex + 1 == room.room_playerLength) {
             playerIndex = 0;
           } else {
@@ -310,7 +319,6 @@ io.on('connection', function (socket) {
               break;
             }
           }
-          console.log('else');
           room.markModified('room_currentCards');
           room.markModified('room_players');
           room.save((err, result) => {
@@ -354,7 +362,7 @@ io.on('connection', function (socket) {
     );
   });
 
-  function initGame() {
+  function restartRound() {
     if (timeOut) clearTimeout(timeOut);
 
     timeOut = setTimeout(function () {
@@ -374,7 +382,7 @@ io.on('connection', function (socket) {
             ];
           }
           room.room_stage = 'ready';
-          room.room_players.push(room.room_players.shift()); //shift first player to last and make him dealer
+          room.room_players.push(room.room_players.shift()); //shift first player to the last to make him dealer
           room.room_specialCard = deck[25];
           room.room_deck = deck.slice(26);
           room.room_dealer = room.room_playerLength - 1;
